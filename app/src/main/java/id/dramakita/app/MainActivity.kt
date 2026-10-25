@@ -1,6 +1,12 @@
 package id.dramakita.app
 
 import android.content.pm.ActivityInfo
+import android.net.Uri
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.PickVisualMediaRequest
+import androidx.activity.result.contract.ActivityResultContracts
+import java.io.File
+import java.io.FileOutputStream
 import android.os.Bundle
 import android.view.View
 import android.view.WindowManager
@@ -25,7 +31,6 @@ import androidx.compose.material.icons.filled.CardGiftcard
 import androidx.compose.material.icons.filled.BookmarkBorder
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.History
-import androidx.compose.material.icons.filled.EmojiEvents
 import androidx.compose.material.icons.filled.HeadsetMic
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Search
@@ -39,6 +44,9 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.filled.Bookmark
 import androidx.compose.material.icons.filled.PhotoCamera
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.LocalFireDepartment
+import androidx.compose.material.icons.filled.EmojiEvents
 import androidx.compose.material.icons.outlined.BookmarkBorder
 import androidx.compose.material.icons.outlined.CardGiftcard
 import androidx.compose.material.icons.outlined.HeadsetMic
@@ -50,6 +58,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.text.style.TextAlign
 import coil.compose.AsyncImage
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
@@ -127,9 +136,10 @@ private fun DramaKitaApp() {
     var search by remember { mutableStateOf("") }
     var category by remember { mutableStateOf("Semua") }
     var backPage by remember { mutableStateOf("home") }
+    var historyRefresh by remember { mutableIntStateOf(0) }
 
     BackHandler(enabled = page != "home") {
-        page = when (page) { "player" -> "detail"; "detail" -> backPage; else -> "home" }
+        page = when (page) { "player" -> "detail"; "detail" -> backPage; "history" -> backPage; else -> "home" }
     }
 
     MaterialTheme(
@@ -153,10 +163,14 @@ private fun DramaKitaApp() {
                     lastWatched = selectedDrama.id
                     lastEpisode = selectedEpisode
                 },
-                onSaveProgress = { position ->
+                onSaveProgress = { position, duration ->
                     prefs.edit().putString("last_drama", selectedDrama.id)
                         .putInt("last_episode", selectedEpisode)
                         .putLong("position_${selectedDrama.id}_$selectedEpisode", position).apply()
+                    if (duration > 0L && position > 0L) {
+                        StageBRepository.saveProgress(context, selectedDrama, selectedEpisode, position, duration)
+                        historyRefresh++
+                    }
                     lastWatched = selectedDrama.id
                     lastEpisode = selectedEpisode
                 }
@@ -174,17 +188,20 @@ private fun DramaKitaApp() {
                 onPlay = { episode -> selectedEpisode = episode; page = "player" }
             )
             "profile" -> ProfileScreen(
-                onNavigate = { destination -> page = destination },
-                watchedCount = if (lastWatched.isNotBlank()) 1 else 0,
+                onNavigate = { destination -> if (destination == "history") backPage = "profile"; page = destination },
+                watchedCount = StageBRepository.watchedEpisodeCount(context),
                 favoriteCount = favorites.size,
-                listCount = catalog.count { it.id == lastWatched || favorites.contains(it.id) }
+                listCount = catalog.count { it.id == lastWatched || favorites.contains(it.id) },
+                badgeCount = StageBRepository.badgeCount(context)
             )
-            "gift" -> SimpleTabScreen(
-                title = "Hadiah",
-                subtitle = "Fitur hadiah dan misi akan hadir di versi berikutnya.",
-                icon = "🎁",
+            "history" -> HistoryScreen(
+                records = remember(historyRefresh, catalog) { StageBRepository.readHistory(context) },
+                catalog = catalog,
+                onBack = { page = backPage },
+                onDramaEpisode = { drama, episode -> backPage = "history"; selectedDrama = drama; selectedEpisode = episode; page = "player" },
                 onNavigate = { destination -> page = destination }
             )
+            "gift" -> GiftScreen(onNavigate = { destination -> page = destination })
             "mylist" -> MyListScreen(
                 dramas = catalog,
                 lastWatched = lastWatched,
@@ -370,10 +387,24 @@ private fun ProfileScreen(
     onNavigate: (String) -> Unit,
     watchedCount: Int,
     favoriteCount: Int,
-    listCount: Int
+    listCount: Int,
+    badgeCount: Int
 ) {
     val context = LocalContext.current
     val prefs = remember { context.getSharedPreferences("dramakita", 0) }
+    var avatarPath by remember { mutableStateOf(prefs.getString("profile_avatar_path", "") ?: "") }
+    val photoPicker = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri: Uri? ->
+        if (uri != null) {
+            try {
+                val target = File(context.filesDir, "profile_avatar.jpg")
+                context.contentResolver.openInputStream(uri)?.use { input -> FileOutputStream(target).use { output -> input.copyTo(output) } }
+                if (target.exists() && target.length() > 0L) {
+                    avatarPath = target.absolutePath
+                    prefs.edit().putString("profile_avatar_path", avatarPath).apply()
+                }
+            } catch (_: Exception) { }
+        }
+    }
     var displayName by remember { mutableStateOf(prefs.getString("profile_name", "Penonton Drakoo") ?: "Penonton Drakoo") }
     var bio by remember { mutableStateOf(prefs.getString("profile_bio", "Pecinta drama pendek ❤️") ?: "") }
     var editName by remember { mutableStateOf("") }
@@ -403,14 +434,18 @@ private fun ProfileScreen(
                     }
                 }
                 Spacer(Modifier.height(20.dp))
-                Row(Modifier.fillMaxWidth().clickable { openEdit() }, verticalAlignment = Alignment.CenterVertically) {
-                    Box(Modifier.size(90.dp)) {
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    Box(Modifier.size(90.dp).clickable { photoPicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) }) {
                         Box(
                             Modifier.fillMaxSize().clip(CircleShape)
                                 .background(Brush.verticalGradient(listOf(Color(0xFFEA7A63), Color(0xFF8B285E)))),
                             contentAlignment = Alignment.Center
                         ) {
-                            Icon(Icons.Filled.Person, null, tint = Color(0xFFFFE9E4), modifier = Modifier.size(52.dp))
+                            if (avatarPath.isNotBlank() && File(avatarPath).exists()) {
+                                AsyncImage(model = File(avatarPath), contentDescription = "Foto profil", contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize().clip(CircleShape))
+                            } else {
+                                Icon(Icons.Filled.Person, null, tint = Color(0xFFFFE9E4), modifier = Modifier.size(52.dp))
+                            }
                         }
                         Box(
                             Modifier.align(Alignment.BottomEnd).offset(x = 2.dp, y = 2.dp).size(30.dp)
@@ -420,7 +455,7 @@ private fun ProfileScreen(
                             Icon(Icons.Filled.PhotoCamera, null, tint = Color.White, modifier = Modifier.size(16.dp))
                         }
                     }
-                    Column(Modifier.weight(1f).padding(start = 22.dp)) {
+                    Column(Modifier.weight(1f).padding(start = 22.dp).clickable { openEdit() }) {
                         Text(displayName, fontSize = 20.sp, fontWeight = FontWeight.ExtraBold, color = Color.White, maxLines = 1, overflow = TextOverflow.Ellipsis)
                         Spacer(Modifier.height(2.dp))
                         Text("@penonton", color = Muted, fontSize = 14.sp)
@@ -435,7 +470,7 @@ private fun ProfileScreen(
                         watchedCount.toString() to "Ditonton",
                         listCount.toString() to "Daftar Tonton",
                         favoriteCount.toString() to "Favorit",
-                        "0" to "Lencana"
+                        badgeCount.toString() to "Lencana"
                     )
                     stats.forEachIndexed { index, stat ->
                         if (index > 0) VerticalDivider(color = LineColor, modifier = Modifier.height(44.dp))
@@ -452,7 +487,7 @@ private fun ProfileScreen(
                     HorizontalDivider(color = LineColor, modifier = Modifier.padding(start = 44.dp))
                     ProfileRow(Icons.Filled.Favorite, "Drama Favorit Saya", "Koleksi drama favorit kamu") { onNavigate("favorites") }
                     HorizontalDivider(color = LineColor, modifier = Modifier.padding(start = 44.dp))
-                    ProfileRow(Icons.Outlined.Schedule, "Riwayat Tontonan", "Drama yang pernah kamu tonton") { onNavigate("mylist") }
+                    ProfileRow(Icons.Outlined.Schedule, "Riwayat Tontonan", "Drama yang pernah kamu tonton") { onNavigate("history") }
                 }
                 Spacer(Modifier.height(18.dp))
                 Column(Modifier.fillMaxWidth().background(PanelBg, RoundedCornerShape(26.dp)).padding(horizontal = 14.dp)) {
@@ -513,6 +548,104 @@ private fun ProfileRow(icon: ImageVector, title: String, subtitle: String, onCli
         }
         Icon(ThinChevron, null, tint = Muted, modifier = Modifier.size(22.dp))
     }
+}
+
+@Composable
+private fun GiftScreen(onNavigate: (String) -> Unit) {
+    val context = LocalContext.current
+    val prefs = remember { context.getSharedPreferences("dramakita", 0) }
+    var streak by remember { mutableIntStateOf(prefs.getInt("daily_streak", 0)) }
+    var checkedIn by remember { mutableStateOf(StageBRepository.hasCheckedInToday(context)) }
+    var badgeCount by remember { mutableIntStateOf(StageBRepository.badgeCount(context)) }
+    Scaffold(containerColor = AppBg, bottomBar = { DrakooBottomBar("gift", onNavigate) }) { padding ->
+        LazyColumn(Modifier.fillMaxSize().padding(padding).padding(20.dp)) {
+            item {
+                Text("Hadiah Harian", color = Color.White, fontSize = 28.sp, fontWeight = FontWeight.ExtraBold)
+                Spacer(Modifier.height(6.dp))
+                Text("Absen setiap hari untuk menjaga streak dan membuka lencana.", color = Muted)
+                Spacer(Modifier.height(22.dp))
+                Column(Modifier.fillMaxWidth().background(PanelBg, RoundedCornerShape(24.dp)).padding(22.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                    Icon(Icons.Filled.LocalFireDepartment, null, tint = Coral, modifier = Modifier.size(58.dp))
+                    Spacer(Modifier.height(8.dp))
+                    Text("$streak hari beruntun", color = Color.White, fontSize = 24.sp, fontWeight = FontWeight.ExtraBold)
+                    Text(if (checkedIn) "Absen hari ini sudah selesai" else "Jangan lupa absen hari ini", color = Muted)
+                    Spacer(Modifier.height(16.dp))
+                    Button(onClick = {
+                        streak = StageBRepository.checkInToday(context)
+                        checkedIn = true
+                        badgeCount = StageBRepository.badgeCount(context)
+                    }, enabled = !checkedIn, modifier = Modifier.fillMaxWidth()) {
+                        Icon(Icons.Filled.CheckCircle, null)
+                        Spacer(Modifier.width(8.dp))
+                        Text(if (checkedIn) "Sudah Absen" else "Absen Sekarang")
+                    }
+                }
+                Spacer(Modifier.height(20.dp))
+                Text("Pencapaian", color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.Bold)
+                Spacer(Modifier.height(10.dp))
+                AchievementRow("🔥", "Absen 3 hari", streak >= 3)
+                AchievementRow("🏆", "Absen 7 hari", streak >= 7)
+                AchievementRow("🎬", "Tonton 5 episode", StageBRepository.watchedEpisodeCount(context) >= 5)
+                Spacer(Modifier.height(12.dp))
+                Text("Lencana terbuka: $badgeCount", color = Coral, fontWeight = FontWeight.Bold)
+            }
+        }
+    }
+}
+
+@Composable
+private fun AchievementRow(emoji: String, title: String, unlocked: Boolean) {
+    Row(Modifier.fillMaxWidth().padding(vertical = 6.dp).background(PanelBg, RoundedCornerShape(14.dp)).padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
+        Text(emoji, fontSize = 25.sp)
+        Text(title, color = Color.White, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f).padding(start = 12.dp))
+        Text(if (unlocked) "Terbuka" else "Terkunci", color = if (unlocked) Coral else Muted, fontSize = 12.sp)
+    }
+}
+
+@Composable
+private fun HistoryScreen(
+    records: List<WatchRecord>, catalog: List<Drama>, onBack: () -> Unit,
+    onDramaEpisode: (Drama, Int) -> Unit, onNavigate: (String) -> Unit
+) {
+    Scaffold(containerColor = AppBg, bottomBar = { DrakooBottomBar("profile", onNavigate) }) { padding ->
+        LazyColumn(Modifier.fillMaxSize().padding(padding).padding(horizontal = 16.dp)) {
+            item {
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    IconButton(onClick = onBack) { Icon(Icons.Default.ArrowBack, "Kembali", tint = Color.White) }
+                    Text("Riwayat Tontonan", color = Color.White, fontSize = 25.sp, fontWeight = FontWeight.ExtraBold)
+                }
+                Text("Episode dan posisi terakhir tersimpan di perangkat ini.", color = Muted, modifier = Modifier.padding(bottom = 14.dp))
+            }
+            if (records.isEmpty()) item {
+                Text("Belum ada riwayat. Tonton episode terlebih dahulu untuk melihat progresnya di sini.", color = Muted, modifier = Modifier.fillMaxWidth().padding(top = 30.dp), textAlign = TextAlign.Center)
+            }
+            items(records.size) { index ->
+                val record = records[index]
+                val drama = catalog.firstOrNull { it.id == record.seriesId }
+                Column(Modifier.fillMaxWidth().padding(vertical = 7.dp).background(PanelBg, RoundedCornerShape(16.dp)).clickable {
+                    if (drama != null) onDramaEpisode(drama, record.episode)
+                }.padding(12.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        if (drama != null) Poster(drama, Modifier.size(76.dp, 94.dp))
+                        else Box(Modifier.size(76.dp, 94.dp).background(Color(0xFF30243A), RoundedCornerShape(12.dp)), contentAlignment = Alignment.Center) { Text("▶", color = Color.White) }
+                        Column(Modifier.weight(1f).padding(start = 12.dp)) {
+                            Text(record.seriesTitle, color = Color.White, fontWeight = FontWeight.Bold, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                            Text("Episode ${record.episode}", color = Muted, fontSize = 13.sp)
+                            Text(if (record.durationMs > 0L) "${formatTime(record.positionMs)} / ${formatTime(record.durationMs)}" else "Posisi tersimpan", color = Muted, fontSize = 12.sp)
+                            Text(java.text.DateFormat.getDateTimeInstance(java.text.DateFormat.SHORT, java.text.DateFormat.SHORT).format(java.util.Date(record.watchedAt)), color = Muted, fontSize = 11.sp)
+                            Spacer(Modifier.height(8.dp))
+                            LinearProgressIndicator(progress = record.progress, modifier = Modifier.fillMaxWidth(), color = Coral, trackColor = LineColor)
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+private fun formatTime(milliseconds: Long): String {
+    val totalSeconds = (milliseconds.coerceAtLeast(0L) / 1000L).toInt()
+    return "%02d:%02d".format(totalSeconds / 60, totalSeconds % 60)
 }
 
 @Composable
@@ -647,7 +780,7 @@ private fun DetailScreen(
 @Composable
 private fun PlayerScreen(
     drama: Drama, episodeNumber: Int, onBack: () -> Unit,
-    onEpisodeChange: (Int) -> Unit, onSaveProgress: (Long) -> Unit
+    onEpisodeChange: (Int) -> Unit, onSaveProgress: (Long, Long) -> Unit
 ) {
     val context = LocalContext.current
     val prefs = remember { context.getSharedPreferences("dramakita", 0) }
@@ -692,14 +825,14 @@ private fun PlayerScreen(
             if ((player.isPlaying || player.currentPosition > 0) && player.playbackState != Player.STATE_ENDED) {
                 val episode = drama.episodes[index]
                 prefs.edit().putLong("position_${drama.id}_${episode.number}", player.currentPosition).apply()
-                onSaveProgress(player.currentPosition)
+                onSaveProgress(player.currentPosition, player.duration.coerceAtLeast(0L))
             }
         }
     }
     LaunchedEffect(ended) {
         if (ended && pagerState.currentPage < drama.episodes.lastIndex) {
             delay(450)
-            onSaveProgress(0L)
+            onSaveProgress(0L, 0L)
             pagerState.animateScrollToPage(pagerState.currentPage + 1)
         }
     }
