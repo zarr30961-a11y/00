@@ -8,7 +8,7 @@ import java.net.HttpURLConnection
 import java.net.URL
 
 /** Ubah URL ini menjadi URL raw catalog.json milikmu. */
-const val CATALOG_URL = "https://raw.githubusercontent.com/USERNAME/REPOSITORY/main/catalog.json"
+const val CATALOG_URL = "https://raw.githubusercontent.com/zarr30961-a11y/0/main/catalog.json"
 
 internal data class RemoteEpisode(val number: Int, val videoUrl: String)
 internal data class RemoteSeries(
