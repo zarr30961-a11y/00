@@ -30,6 +30,8 @@ import androidx.compose.material.icons.filled.HeadsetMic
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.pager.VerticalPager
+import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.border
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
@@ -48,6 +50,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.res.painterResource
+import coil.compose.AsyncImage
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -71,11 +74,11 @@ import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.ui.PlayerView
 import kotlinx.coroutines.delay
 
-private data class Episode(val number: Int, val videoUrl: String)
-private data class Drama(
+internal data class Episode(val number: Int, val videoUrl: String)
+internal data class Drama(
     val id: String, val title: String, val category: String,
     val synopsis: String, val colors: List<Color>, val episodes: List<Episode>,
-    val cover: Int? = null
+    val cover: Int? = null, val coverUrl: String? = null
 )
 
 private val sampleVideo = "https://storage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4"
@@ -110,7 +113,9 @@ private fun DramaKitaApp() {
     val context = LocalContext.current
     val prefs = remember { context.getSharedPreferences("dramakita", 0) }
     var page by remember { mutableStateOf("home") }
+    var catalog by remember { mutableStateOf(dramas) }
     var selectedDrama by remember { mutableStateOf(dramas.first()) }
+    LaunchedEffect(Unit) { catalog = CatalogRepository.load(context, dramas) }
     var selectedEpisode by remember { mutableIntStateOf(1) }
     var favorites by remember {
         mutableStateOf(prefs.getStringSet("favorites", emptySet())?.toSet() ?: emptySet())
@@ -141,8 +146,8 @@ private fun DramaKitaApp() {
                 drama = selectedDrama,
                 episodeNumber = selectedEpisode,
                 onBack = { page = "detail" },
-                onNext = {
-                    if (selectedEpisode < selectedDrama.episodes.size) selectedEpisode++
+                onEpisodeChange = { episode ->
+                    selectedEpisode = episode.coerceIn(1, selectedDrama.episodes.size)
                     prefs.edit().putString("last_drama", selectedDrama.id)
                         .putInt("last_episode", selectedEpisode).apply()
                     lastWatched = selectedDrama.id
@@ -172,7 +177,7 @@ private fun DramaKitaApp() {
                 onNavigate = { destination -> page = destination },
                 watchedCount = if (lastWatched.isNotBlank()) 1 else 0,
                 favoriteCount = favorites.size,
-                listCount = dramas.count { it.id == lastWatched || favorites.contains(it.id) }
+                listCount = catalog.count { it.id == lastWatched || favorites.contains(it.id) }
             )
             "gift" -> SimpleTabScreen(
                 title = "Hadiah",
@@ -181,7 +186,7 @@ private fun DramaKitaApp() {
                 onNavigate = { destination -> page = destination }
             )
             "mylist" -> MyListScreen(
-                dramas = dramas,
+                dramas = catalog,
                 lastWatched = lastWatched,
                 lastEpisode = lastEpisode,
                 favorites = favorites,
@@ -190,13 +195,13 @@ private fun DramaKitaApp() {
             )
             else -> HomeScreen(
                 title = if (page == "favorites") "Drama Favorit Saya" else "DramaKita",
-                dramas = if (page == "favorites") dramas.filter { favorites.contains(it.id) } else dramas,
+                dramas = if (page == "favorites") catalog.filter { favorites.contains(it.id) } else catalog,
                 search = search,
                 onSearch = { search = it },
                 category = category,
                 onCategory = { category = it },
                 showSearch = true,
-                lastDrama = if (page == "favorites") null else dramas.find { it.id == lastWatched },
+                lastDrama = if (page == "favorites") null else catalog.find { it.id == lastWatched },
                 lastEpisode = lastEpisode,
                 onDrama = { selectedDrama = it; backPage = page; page = "detail" },
                 onResume = { backPage = page; selectedDrama = it; selectedEpisode = lastEpisode.coerceIn(1, it.episodes.size); page = "player" },
@@ -550,6 +555,15 @@ private fun MyListScreen(
 
 @Composable
 private fun Poster(drama: Drama, modifier: Modifier = Modifier) {
+    if (!drama.coverUrl.isNullOrBlank()) {
+        AsyncImage(
+            model = drama.coverUrl,
+            contentDescription = drama.title,
+            contentScale = ContentScale.Crop,
+            modifier = modifier.clip(RoundedCornerShape(14.dp))
+        )
+        return
+    }
     if (drama.cover != null) {
         Image(
             painter = painterResource(drama.cover),
@@ -633,16 +647,17 @@ private fun DetailScreen(
 @Composable
 private fun PlayerScreen(
     drama: Drama, episodeNumber: Int, onBack: () -> Unit,
-    onNext: () -> Unit, onSaveProgress: (Long) -> Unit
+    onEpisodeChange: (Int) -> Unit, onSaveProgress: (Long) -> Unit
 ) {
     val context = LocalContext.current
+    val prefs = remember { context.getSharedPreferences("dramakita", 0) }
     var playerError by remember { mutableStateOf(false) }
     var ended by remember { mutableStateOf(false) }
-    val prefs = remember { context.getSharedPreferences("dramakita", 0) }
+    var speedIndex by remember { mutableIntStateOf(1) }
+    val speeds = listOf(0.75f, 1f, 1.25f, 1.5f)
+    val pagerState = rememberPagerState(initialPage = (episodeNumber - 1).coerceIn(0, drama.episodes.lastIndex), pageCount = { drama.episodes.size })
     val player = remember(drama.id) {
-        ExoPlayer.Builder(context).build().apply {
-            repeatMode = Player.REPEAT_MODE_OFF
-        }
+        ExoPlayer.Builder(context).build().apply { repeatMode = Player.REPEAT_MODE_OFF }
     }
 
     DisposableEffect(player) {
@@ -656,52 +671,73 @@ private fun PlayerScreen(
         onDispose { player.removeListener(listener); player.release() }
     }
 
-    LaunchedEffect(episodeNumber, drama.id) {
+    LaunchedEffect(drama.id, pagerState.currentPage) {
+        val index = pagerState.currentPage.coerceIn(0, drama.episodes.lastIndex)
+        val episode = drama.episodes[index]
         playerError = false
         ended = false
-        val saved = prefs.getLong("position_${drama.id}_$episodeNumber", 0L)
-        player.setMediaItem(MediaItem.fromUri(drama.episodes[episodeNumber - 1].videoUrl))
+        onEpisodeChange(index + 1)
+        val saved = prefs.getLong("position_${drama.id}_${episode.number}", 0L)
+        val items = drama.episodes.map { MediaItem.fromUri(it.videoUrl) }
+        player.setMediaItems(items, index, saved)
         player.prepare()
-        if (saved > 0) player.seekTo(saved)
         player.playWhenReady = true
+        player.setPlaybackSpeed(speeds[speedIndex])
     }
-    LaunchedEffect(player, episodeNumber) {
+
+    LaunchedEffect(player, pagerState.currentPage) {
         while (true) {
             delay(1500)
+            val index = pagerState.currentPage.coerceIn(0, drama.episodes.lastIndex)
             if ((player.isPlaying || player.currentPosition > 0) && player.playbackState != Player.STATE_ENDED) {
+                val episode = drama.episodes[index]
+                prefs.edit().putLong("position_${drama.id}_${episode.number}", player.currentPosition).apply()
                 onSaveProgress(player.currentPosition)
             }
         }
     }
     LaunchedEffect(ended) {
-        if (ended) {
+        if (ended && pagerState.currentPage < drama.episodes.lastIndex) {
             delay(450)
             onSaveProgress(0L)
-            if (episodeNumber < drama.episodes.size) onNext()
+            pagerState.animateScrollToPage(pagerState.currentPage + 1)
         }
     }
 
     Box(Modifier.fillMaxSize().background(Color.Black)) {
-        AndroidView(
-            factory = { ctx ->
-                PlayerView(ctx).apply {
-                    this.player = player
-                    useController = true
-                    setShowBuffering(PlayerView.SHOW_BUFFERING_ALWAYS)
+        VerticalPager(state = pagerState, modifier = Modifier.fillMaxSize(), beyondViewportPageCount = 1) { pageIndex ->
+            if (pageIndex == pagerState.currentPage) {
+                AndroidView(
+                    factory = { ctx -> PlayerView(ctx).apply {
+                        this.player = player
+                        useController = true
+                        setShowBuffering(PlayerView.SHOW_BUFFERING_ALWAYS)
+                        resizeMode = androidx.media3.ui.AspectRatioFrameLayout.RESIZE_MODE_FIT
+                    } },
+                    update = { it.player = player },
+                    modifier = Modifier.fillMaxSize()
+                )
+            } else {
+                Box(Modifier.fillMaxSize().background(Color.Black), contentAlignment = Alignment.Center) {
+                    Text("Episode ${drama.episodes[pageIndex].number}", color = Color.White.copy(alpha = 0.65f))
                 }
-            },
-            update = { it.player = player },
-            modifier = Modifier.fillMaxSize()
-        )
+            }
+        }
         Row(
             Modifier.align(Alignment.TopStart).statusBarsPadding().padding(10.dp)
-                .background(Color.Black.copy(alpha = .45f), RoundedCornerShape(24.dp))
+                .background(Color.Black.copy(alpha = .55f), RoundedCornerShape(24.dp))
                 .clickable { onBack() }.padding(horizontal = 12.dp, vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             Icon(Icons.Default.ArrowBack, "Kembali", tint = Color.White)
-            Text("  ${drama.title} • Ep. $episodeNumber", color = Color.White, maxLines = 1)
+            Text("  ${drama.title} • Ep. ${pagerState.currentPage + 1}", color = Color.White, maxLines = 1)
         }
+        TextButton(
+            onClick = { speedIndex = (speedIndex + 1) % speeds.size; player.setPlaybackSpeed(speeds[speedIndex]) },
+            modifier = Modifier.align(Alignment.TopEnd).statusBarsPadding().padding(8.dp)
+                .background(Color.Black.copy(alpha = .55f), RoundedCornerShape(20.dp))
+        ) { Text("${speeds[speedIndex]}x", color = Color.White, fontWeight = FontWeight.Bold) }
+
         if (playerError) {
             Column(
                 Modifier.align(Alignment.Center).padding(24.dp)
@@ -709,26 +745,23 @@ private fun PlayerScreen(
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
                 Text("Video gagal dimuat.", fontWeight = FontWeight.Bold, color = Color.White)
-                Text("Periksa internet lalu ketuk untuk coba lagi.", color = Color.LightGray)
+                Text("Periksa internet lalu coba lagi.", color = Color.LightGray)
                 Spacer(Modifier.height(10.dp))
                 Button(onClick = {
                     playerError = false
+                    val index = pagerState.currentPage.coerceIn(0, drama.episodes.lastIndex)
+                    val saved = prefs.getLong("position_${drama.id}_${drama.episodes[index].number}", 0L)
+                    player.setMediaItems(drama.episodes.map { MediaItem.fromUri(it.videoUrl) }, index, saved)
                     player.prepare()
-                    player.play()
+                    player.playWhenReady = true
                 }) { Text("Coba lagi") }
             }
         }
-        if (episodeNumber < drama.episodes.size) {
-            Button(
-                onClick = onNext,
-                modifier = Modifier.align(Alignment.BottomEnd).navigationBarsPadding()
-                    .padding(start = 16.dp, end = 16.dp, bottom = 100.dp),
-                shape = RoundedCornerShape(24.dp)
-            ) { Text("Berikutnya  →") }
-        } else if (ended) {
-            Text("Kamu sudah sampai episode terakhir.",
-                Modifier.align(Alignment.BottomCenter).navigationBarsPadding().padding(bottom = 100.dp),
-                color = Color.White)
-        }
+        Text(
+            "Geser ke atas/bawah untuk pindah episode",
+            Modifier.align(Alignment.BottomCenter).navigationBarsPadding().padding(bottom = 28.dp)
+                .background(Color.Black.copy(alpha = .45f), RoundedCornerShape(20.dp)).padding(horizontal = 12.dp, vertical = 7.dp),
+            color = Color.White.copy(alpha = .85f), fontSize = 12.sp
+        )
     }
 }
