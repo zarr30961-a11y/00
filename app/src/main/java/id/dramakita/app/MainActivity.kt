@@ -72,6 +72,7 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.NewReleases
 import androidx.compose.material.icons.outlined.CheckCircle
+import androidx.compose.material.icons.outlined.CloudOff
 import androidx.compose.material.icons.outlined.FavoriteBorder
 import androidx.compose.material.icons.outlined.History
 import androidx.compose.material.icons.outlined.Notifications
@@ -141,9 +142,21 @@ private fun DramaKitaApp() {
     val context = LocalContext.current
     val prefs = remember { context.getSharedPreferences("dramakita", 0) }
     var page by remember { mutableStateOf("home") }
-    var catalog by remember { mutableStateOf(dramas) }
+    var catalog by remember { mutableStateOf(emptyList<Drama>()) }
+    var catalogState by remember { mutableStateOf("loading") }
+    var reloadKey by remember { mutableIntStateOf(0) }
     var selectedDrama by remember { mutableStateOf(dramas.first()) }
-    LaunchedEffect(Unit) { catalog = CatalogRepository.load(context, dramas) }
+    LaunchedEffect(reloadKey) {
+        catalogState = "loading"
+        val loaded = CatalogRepository.load(dramas)
+        if (loaded != null) {
+            catalog = loaded
+            catalogState = "online"
+        } else {
+            catalog = emptyList()
+            catalogState = "offline"
+        }
+    }
     var selectedEpisode by remember { mutableIntStateOf(1) }
     var favorites by remember {
         mutableStateOf(prefs.getStringSet("favorites", emptySet())?.toSet() ?: emptySet())
@@ -231,7 +244,9 @@ private fun DramaKitaApp() {
                 category = category,
                 onCategory = { category = it },
                 onDrama = { selectedDrama = it; backPage = "search"; page = "detail" },
-                onNavigate = { destination -> page = destination }
+                onNavigate = { destination -> page = destination },
+                catalogState = catalogState,
+                onRetry = { reloadKey++ }
             )
             "mylist", "favorites" -> MyListScreen(
                 dramas = catalog,
@@ -257,7 +272,9 @@ private fun DramaKitaApp() {
                     }
                     historyRefresh++
                 },
-                onNavigate = { destination -> page = destination }
+                onNavigate = { destination -> page = destination },
+                catalogState = catalogState,
+                onRetry = { reloadKey++ }
             )
             else -> HomeScreen(
                 dramas = catalog,
@@ -266,7 +283,9 @@ private fun DramaKitaApp() {
                 category = category,
                 onCategory = { category = it },
                 onDrama = { selectedDrama = it; backPage = "home"; page = "detail" },
-                onNavigate = { destination -> page = destination }
+                onNavigate = { destination -> page = destination },
+                catalogState = catalogState,
+                onRetry = { reloadKey++ }
             )
         }
     }
@@ -327,6 +346,29 @@ private fun secondTag(category: String): String? = when (category) {
     "Romansa", "Keluarga" -> "Drama"
     "Misteri" -> "Thriller"
     else -> null
+}
+
+@Composable
+private fun CatalogStatus(state: String, onRetry: () -> Unit) {
+    Column(
+        Modifier.fillMaxWidth().padding(vertical = 48.dp, horizontal = 12.dp),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        if (state == "loading") {
+            CircularProgressIndicator(color = PurpleLight)
+            Spacer(Modifier.height(16.dp))
+            Text("Memuat daftar drama...", color = Muted)
+        } else {
+            Icon(Icons.Outlined.CloudOff, null, tint = Muted, modifier = Modifier.size(56.dp))
+            Spacer(Modifier.height(14.dp))
+            Text("Tidak ada koneksi internet", color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.Bold)
+            Spacer(Modifier.height(6.dp))
+            Text("Drama hanya bisa ditonton saat online. Hubungkan internet lalu coba lagi.",
+                color = Muted, fontSize = 14.sp, textAlign = TextAlign.Center)
+            Spacer(Modifier.height(18.dp))
+            Button(onClick = onRetry) { Text("Coba lagi") }
+        }
+    }
 }
 
 @Composable
@@ -445,7 +487,8 @@ private fun SeriesCard(drama: Drama, badge: String?, onClick: () -> Unit, modifi
 private fun HomeScreen(
     dramas: List<Drama>, search: String, onSearch: (String) -> Unit,
     category: String, onCategory: (String) -> Unit,
-    onDrama: (Drama) -> Unit, onNavigate: (String) -> Unit
+    onDrama: (Drama) -> Unit, onNavigate: (String) -> Unit,
+    catalogState: String, onRetry: () -> Unit
 ) {
     var showNotif by remember { mutableStateOf(false) }
     val filtered = dramas.filter {
@@ -475,7 +518,9 @@ private fun HomeScreen(
                 SectionHeader("Pilihan untukmu", action = "Lihat Semua") { onCategory("Semua"); onSearch("") }
                 Spacer(Modifier.height(12.dp))
             }
-            if (filtered.isEmpty()) {
+            if (catalogState != "online") {
+                item { CatalogStatus(catalogState, onRetry) }
+            } else if (filtered.isEmpty()) {
                 item { Text("Belum ada serial di sini.", color = Muted, modifier = Modifier.padding(vertical = 28.dp)) }
             }
             items(rows.size) { r ->
@@ -504,7 +549,8 @@ private fun HomeScreen(
 private fun SearchScreen(
     dramas: List<Drama>, search: String, onSearch: (String) -> Unit,
     category: String, onCategory: (String) -> Unit,
-    onDrama: (Drama) -> Unit, onNavigate: (String) -> Unit
+    onDrama: (Drama) -> Unit, onNavigate: (String) -> Unit,
+    catalogState: String, onRetry: () -> Unit
 ) {
     val context = LocalContext.current
     val prefs = remember { context.getSharedPreferences("dramakita", 0) }
@@ -567,6 +613,9 @@ private fun SearchScreen(
                     Spacer(Modifier.height(24.dp))
                 }
             }
+            if (catalogState != "online") {
+                item { CatalogStatus(catalogState, onRetry) }
+            } else {
             item {
                 SectionHeader("Pencarian Populer", icon = Icons.Filled.LocalFireDepartment,
                     iconTint = Color(0xFFB45CFF), action = "Lihat Semua") { onSearch(""); onCategory("Semua") }
@@ -616,6 +665,7 @@ private fun SearchScreen(
                     }
                     Icon(ThinChevron, null, tint = Color(0xFFCFC6EA), modifier = Modifier.padding(end = 14.dp).size(22.dp))
                 }
+            }
             }
             item { Spacer(Modifier.height(16.dp)) }
         }
@@ -1077,7 +1127,8 @@ private fun ListEntryCard(
 private fun MyListScreen(
     dramas: List<Drama>, records: List<WatchRecord>, favorites: Set<String>, initialFilter: String,
     onDrama: (Drama) -> Unit, onPlay: (Drama, Int) -> Unit,
-    onRemoveFavorite: (String) -> Unit, onRemoveHistory: (String) -> Unit, onNavigate: (String) -> Unit
+    onRemoveFavorite: (String) -> Unit, onRemoveHistory: (String) -> Unit, onNavigate: (String) -> Unit,
+    catalogState: String, onRetry: () -> Unit
 ) {
     var filter by remember(initialFilter) { mutableStateOf(initialFilter) }
     val latest = records.groupBy { it.seriesId }.mapValues { it.value.first() }
@@ -1110,7 +1161,9 @@ private fun MyListScreen(
                     filters.forEach { f -> ListFilterChip(f.first, f.second, f.third, filter == f.first) { filter = f.first } }
                 }
                 Spacer(Modifier.height(18.dp))
-                if (visible.isEmpty()) {
+                if (catalogState != "online") {
+                    CatalogStatus(catalogState, onRetry)
+                } else if (visible.isEmpty()) {
                     Text(
                         if (entries.isEmpty()) "Belum ada drama di daftar kamu. Tonton serial dari Beranda atau tandai favorit untuk mulai."
                         else "Belum ada drama di kategori ini.",
