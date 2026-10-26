@@ -64,6 +64,25 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.graphics.vector.path
+import android.content.SharedPreferences
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material.icons.filled.AutoAwesome
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.NewReleases
+import androidx.compose.material.icons.outlined.CheckCircle
+import androidx.compose.material.icons.outlined.FavoriteBorder
+import androidx.compose.material.icons.outlined.History
+import androidx.compose.material.icons.outlined.Notifications
+import androidx.compose.material.icons.outlined.PlayArrow
+import androidx.compose.material.icons.outlined.PlayCircle
+import androidx.compose.material.icons.outlined.VerifiedUser
+import androidx.compose.material.icons.outlined.Visibility
+import androidx.compose.ui.BiasAlignment
+import androidx.compose.ui.graphics.PathFillType
+import androidx.compose.ui.graphics.Shape
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -111,8 +130,8 @@ private val dramas = listOf(
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        window.statusBarColor = android.graphics.Color.rgb(12, 12, 16)
-        window.navigationBarColor = android.graphics.Color.rgb(12, 12, 16)
+        window.statusBarColor = android.graphics.Color.rgb(13, 8, 32)
+        window.navigationBarColor = android.graphics.Color.rgb(14, 8, 37)
         setContent { DramaKitaApp() }
     }
 }
@@ -144,9 +163,9 @@ private fun DramaKitaApp() {
 
     MaterialTheme(
         colorScheme = darkColorScheme(
-            primary = Color(0xFFFF5277),
-            background = Color(0xFF0C0C10),
-            surface = Color(0xFF19191F),
+            primary = Color(0xFF8B3CF0),
+            background = Color(0xFF0D0820),
+            surface = Color(0xFF1A1236),
             onBackground = Color(0xFFF7F4F5),
             onSurface = Color(0xFFF7F4F5)
         )
@@ -191,7 +210,10 @@ private fun DramaKitaApp() {
                 onNavigate = { destination -> if (destination == "history") backPage = "profile"; page = destination },
                 watchedCount = StageBRepository.watchedEpisodeCount(context),
                 favoriteCount = favorites.size,
-                listCount = catalog.count { it.id == lastWatched || favorites.contains(it.id) },
+                listCount = remember(historyRefresh, catalog, favorites) {
+                    val ids = StageBRepository.readHistory(context).map { it.seriesId }.toSet() + favorites
+                    catalog.count { it.id in ids }
+                },
                 badgeCount = StageBRepository.badgeCount(context)
             )
             "history" -> HistoryScreen(
@@ -202,134 +224,66 @@ private fun DramaKitaApp() {
                 onNavigate = { destination -> page = destination }
             )
             "gift" -> GiftScreen(onNavigate = { destination -> page = destination })
-            "mylist" -> MyListScreen(
+            "search" -> SearchScreen(
                 dramas = catalog,
-                lastWatched = lastWatched,
-                lastEpisode = lastEpisode,
-                favorites = favorites,
-                onDrama = { selectedDrama = it; backPage = "mylist"; page = "detail" },
-                onNavigate = { destination -> page = destination }
-            )
-            else -> HomeScreen(
-                title = if (page == "favorites") "Drama Favorit Saya" else "DramaKita",
-                dramas = if (page == "favorites") catalog.filter { favorites.contains(it.id) } else catalog,
                 search = search,
                 onSearch = { search = it },
                 category = category,
                 onCategory = { category = it },
-                showSearch = true,
-                lastDrama = if (page == "favorites") null else catalog.find { it.id == lastWatched },
-                lastEpisode = lastEpisode,
+                onDrama = { selectedDrama = it; backPage = "search"; page = "detail" },
+                onNavigate = { destination -> page = destination }
+            )
+            "mylist", "favorites" -> MyListScreen(
+                dramas = catalog,
+                records = remember(historyRefresh, catalog) { StageBRepository.readHistory(context) },
+                favorites = favorites,
+                initialFilter = if (page == "favorites") "Favorit" else "Semua",
                 onDrama = { selectedDrama = it; backPage = page; page = "detail" },
-                onResume = { backPage = page; selectedDrama = it; selectedEpisode = lastEpisode.coerceIn(1, it.episodes.size); page = "player" },
-                selectedTab = if (page == "search") "search" else if (page == "favorites") "mylist" else "home",
+                onPlay = { drama, episode ->
+                    backPage = page
+                    selectedDrama = drama
+                    selectedEpisode = episode.coerceIn(1, drama.episodes.size)
+                    page = "player"
+                },
+                onRemoveFavorite = { id ->
+                    favorites = favorites - id
+                    prefs.edit().putStringSet("favorites", favorites).apply()
+                },
+                onRemoveHistory = { id ->
+                    StageBRepository.removeSeries(context, id)
+                    if (lastWatched == id) {
+                        lastWatched = ""
+                        prefs.edit().remove("last_drama").apply()
+                    }
+                    historyRefresh++
+                },
+                onNavigate = { destination -> page = destination }
+            )
+            else -> HomeScreen(
+                dramas = catalog,
+                search = search,
+                onSearch = { search = it },
+                category = category,
+                onCategory = { category = it },
+                onDrama = { selectedDrama = it; backPage = "home"; page = "detail" },
                 onNavigate = { destination -> page = destination }
             )
         }
     }
 }
 
-@Composable
-private fun HomeScreen(
-    title: String, dramas: List<Drama>, search: String, onSearch: (String) -> Unit,
-    category: String, onCategory: (String) -> Unit, showSearch: Boolean,
-    lastDrama: Drama?, lastEpisode: Int, onDrama: (Drama) -> Unit,
-    onResume: (Drama) -> Unit, selectedTab: String, onNavigate: (String) -> Unit
-) {
-    val filtered = dramas.filter {
-        it.title.contains(search, true) && (category == "Semua" || it.category == category)
-    }
-    Scaffold(
-        containerColor = AppBg,
-        bottomBar = { DrakooBottomBar(selectedTab, onNavigate) }
-    ) { padding ->
-        LazyColumn(Modifier.fillMaxSize().padding(padding).padding(horizontal = 16.dp)) {
-            item {
-                Spacer(Modifier.height(18.dp))
-                Text(if (selectedTab == "search") "Search" else title, fontSize = 28.sp, fontWeight = FontWeight.ExtraBold, color = Color.White)
-                Text("Cerita singkat, rasa yang panjang.", color = Color.LightGray, fontSize = 14.sp)
-                Spacer(Modifier.height(16.dp))
-            }
-            if (showSearch) {
-                item {
-                    OutlinedTextField(
-                        value = search, onValueChange = onSearch, modifier = Modifier.fillMaxWidth(),
-                        placeholder = { Text("Cari judul serial...") },
-                        leadingIcon = { Icon(Icons.Default.Search, null) }, singleLine = true,
-                        shape = RoundedCornerShape(14.dp),
-                        colors = OutlinedTextFieldDefaults.colors(
-                            focusedBorderColor = Color(0xFFFF5277),
-                            unfocusedBorderColor = Color(0xFF3A3A43)
-                        )
-                    )
-                    Spacer(Modifier.height(12.dp))
-                    Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        listOf("Semua", "Romansa", "Keluarga", "Misteri", "Fantasi").forEach { c ->
-                            FilterChip(selected = category == c, onClick = { onCategory(c) },
-                                label = { Text(c) })
-                        }
-                    }
-                    Spacer(Modifier.height(16.dp))
-                    if (lastDrama != null) {
-                        Text("Lanjutkan menonton", fontSize = 19.sp, fontWeight = FontWeight.Bold)
-                        Spacer(Modifier.height(8.dp))
-                        Row(
-                            Modifier.fillMaxWidth().background(Color(0xFF202027), RoundedCornerShape(14.dp))
-                                .clickable { onResume(lastDrama) }.padding(12.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Poster(lastDrama, Modifier.size(width = 70.dp, height = 92.dp))
-                            Column(Modifier.weight(1f).padding(start = 12.dp)) {
-                                Text(lastDrama.title, fontWeight = FontWeight.Bold)
-                                Text("Episode $lastEpisode", color = Color.LightGray, fontSize = 13.sp)
-                                Text("Lanjutkan  →", color = Color(0xFFFF5277), fontWeight = FontWeight.Bold)
-                            }
-                        }
-                        Spacer(Modifier.height(20.dp))
-                    }
-                }
-            }
-            item {
-                Text(if (title == "Drama Favorit Saya") "Serial favorit" else "Pilihan untukmu",
-                    fontSize = 20.sp, fontWeight = FontWeight.Bold)
-                Spacer(Modifier.height(12.dp))
-            }
-            if (filtered.isEmpty()) {
-                item { Text("Belum ada serial di sini.", color = Color.LightGray, modifier = Modifier.padding(vertical = 28.dp)) }
-            } else {
-                item {
-                    LazyVerticalGrid(
-                        columns = GridCells.Fixed(2),
-                        modifier = Modifier.fillMaxWidth().height(((filtered.size + 1) / 2 * 280).dp),
-                        horizontalArrangement = Arrangement.spacedBy(12.dp),
-                        verticalArrangement = Arrangement.spacedBy(14.dp),
-                        userScrollEnabled = false
-                    ) {
-                        items(filtered) { drama ->
-                            Column(Modifier.clickable { onDrama(drama) }) {
-                                Poster(drama, Modifier.fillMaxWidth().height(210.dp))
-                                Spacer(Modifier.height(8.dp))
-                                Text(drama.title, fontWeight = FontWeight.Bold, maxLines = 2,
-                                    overflow = TextOverflow.Ellipsis, color = Color.White)
-                                Text("${drama.episodes.size} episode • ${drama.category}",
-                                    color = Color.LightGray, fontSize = 12.sp)
-                            }
-                        }
-                    }
-                }
-            }
-            item { Spacer(Modifier.height(20.dp)) }
-        }
-    }
-}
-
-
-private val AppBg = Color(0xFF1A0F1E)
-private val PanelBg = Color(0xFF2A1B30)
-private val Coral = Color(0xFFFF5C60)
-private val Amber = Color(0xFFFFB53F)
-private val Muted = Color(0xFFB4A6BA)
-private val LineColor = Color(0xFF3F2C47)
+private val AppBg = Color(0xFF0D0820)
+private val BarBg = Color(0xFF0E0825)
+private val PanelBg = Color(0xFF140D2E)
+private val CardBg = Color(0xFF120B29)
+private val Coral = Color(0xFFA06BFF)
+private val Purple = Color(0xFF8B3CF0)
+private val PurpleLight = Color(0xFFA56BFF)
+private val TitlePurple = Color(0xFFA64DF5)
+private val Amber = Color(0xFFFFA726)
+private val Muted = Color(0xFFA99BCB)
+private val LineColor = Color(0xFF2B2057)
+private val ChipBorder = Color(0xFF3A2D6B)
 
 private val ThinChevron: ImageVector by lazy {
     ImageVector.Builder(defaultWidth = 24.dp, defaultHeight = 24.dp, viewportWidth = 24f, viewportHeight = 24f).apply {
@@ -340,42 +294,364 @@ private val ThinChevron: ImageVector by lazy {
     }.build()
 }
 
-private val CrownIcon: ImageVector by lazy {
+private val CrownFilled: ImageVector by lazy {
     ImageVector.Builder(defaultWidth = 24.dp, defaultHeight = 24.dp, viewportWidth = 24f, viewportHeight = 24f).apply {
-        path(fill = null, stroke = SolidColor(Color.Black), strokeLineWidth = 2f,
-            strokeLineCap = StrokeCap.Round, strokeLineJoin = StrokeJoin.Round) {
-            moveTo(4f, 17f); lineTo(3f, 7f); lineTo(8f, 11f); lineTo(12f, 4f)
-            lineTo(16f, 11f); lineTo(21f, 7f); lineTo(20f, 17f); close()
-            moveTo(5f, 21f); lineTo(19f, 21f)
+        path(fill = SolidColor(Color.Black), pathFillType = PathFillType.EvenOdd) {
+            moveTo(2.5f, 8f); lineTo(7.5f, 12f); lineTo(12f, 4.5f); lineTo(16.5f, 12f); lineTo(21.5f, 8f)
+            lineTo(19.5f, 19f); lineTo(4.5f, 19f); close()
+            moveTo(12f, 11.5f); lineTo(14f, 14f); lineTo(12f, 16.5f); lineTo(10f, 14f); close()
+        }
+        path(fill = SolidColor(Color.Black)) {
+            moveTo(5f, 20.5f); lineTo(19f, 20.5f); lineTo(19f, 22f); lineTo(5f, 22f); close()
         }
     }.build()
 }
 
-private data class DrakooTab(val id: String, val label: String, val icon: ImageVector, val iconOn: ImageVector)
+private fun readSearchHistory(prefs: SharedPreferences): List<String> =
+    prefs.getString("search_history", "")?.split("\n")?.filter { it.isNotBlank() } ?: emptyList()
+
+private fun writeSearchHistory(prefs: SharedPreferences, list: List<String>) {
+    prefs.edit().putString("search_history", list.joinToString("\n")).apply()
+}
+
+private fun badgeIcon(badge: String): ImageVector? = when (badge) {
+    "Populer" -> Icons.Filled.LocalFireDepartment
+    "Terbaru" -> Icons.Filled.AutoAwesome
+    "Paling Baru" -> Icons.Filled.NewReleases
+    "Favorit" -> Icons.Filled.Favorite
+    else -> null
+}
+
+private fun secondTag(category: String): String? = when (category) {
+    "Fantasi" -> "Aksi"
+    "Romansa", "Keluarga" -> "Drama"
+    "Misteri" -> "Thriller"
+    else -> null
+}
+
+@Composable
+private fun GradientTitle(first: String, second: String, size: Int = 30) {
+    Row {
+        Text(first, color = Color.White, fontSize = size.sp, fontWeight = FontWeight.ExtraBold)
+        Text(second, color = TitlePurple, fontSize = size.sp, fontWeight = FontWeight.ExtraBold)
+    }
+}
+
+@Composable
+private fun SearchField(value: String, onChange: (String) -> Unit, glow: Boolean = false, onDone: () -> Unit = {}) {
+    OutlinedTextField(
+        value = value,
+        onValueChange = onChange,
+        modifier = Modifier.fillMaxWidth(),
+        placeholder = { Text("Cari judul serial...", color = Muted) },
+        leadingIcon = { Icon(Icons.Outlined.Search, null, tint = Muted) },
+        singleLine = true,
+        shape = RoundedCornerShape(16.dp),
+        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+        keyboardActions = KeyboardActions(onSearch = { onDone() }),
+        colors = OutlinedTextFieldDefaults.colors(
+            focusedBorderColor = PurpleLight,
+            unfocusedBorderColor = if (glow) Color(0xFF5B44C7) else ChipBorder,
+            focusedTextColor = Color.White,
+            unfocusedTextColor = Color.White,
+            cursorColor = PurpleLight
+        )
+    )
+}
+
+@Composable
+private fun CategoryChips(selected: String, onSelect: (String) -> Unit) {
+    Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        listOf("Semua", "Romansa", "Keluarga", "Misteri", "Fantasi").forEach { c ->
+            val on = c == selected
+            Box(
+                Modifier.clip(RoundedCornerShape(50))
+                    .then(
+                        if (on) Modifier.background(Brush.horizontalGradient(listOf(Color(0xFF7B3FE4), Color(0xFF9B4DFF))))
+                        else Modifier.border(1.dp, ChipBorder, RoundedCornerShape(50))
+                    )
+                    .clickable { onSelect(c) }
+                    .padding(horizontal = 20.dp, vertical = 10.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(c, color = if (on) Color.White else Color(0xFFCFC6EA), fontSize = 14.sp,
+                    fontWeight = if (on) FontWeight.Bold else FontWeight.Medium)
+            }
+        }
+    }
+}
+
+@Composable
+private fun SectionHeader(
+    title: String, icon: ImageVector? = null, iconTint: Color = PurpleLight,
+    action: String? = null, onAction: () -> Unit = {}
+) {
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        if (icon != null) {
+            Icon(icon, null, tint = iconTint, modifier = Modifier.size(24.dp))
+            Spacer(Modifier.width(8.dp))
+        }
+        Text(title, color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
+        if (action != null) {
+            Row(Modifier.clickable { onAction() }, verticalAlignment = Alignment.CenterVertically) {
+                Text(action, color = PurpleLight, fontSize = 14.sp, fontWeight = FontWeight.Medium)
+                Icon(ThinChevron, null, tint = PurpleLight, modifier = Modifier.size(18.dp))
+            }
+        }
+    }
+}
+
+@Composable
+private fun BadgePill(text: String, icon: ImageVector?, modifier: Modifier = Modifier) {
+    Row(
+        modifier.background(Color(0xFF7C3AED), RoundedCornerShape(50)).padding(horizontal = 9.dp, vertical = 5.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        if (icon != null) {
+            Icon(icon, null, tint = Color.White, modifier = Modifier.size(13.dp))
+            Spacer(Modifier.width(4.dp))
+        }
+        Text(text, color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+    }
+}
+
+@Composable
+private fun SeriesCard(drama: Drama, badge: String?, onClick: () -> Unit, modifier: Modifier = Modifier) {
+    val shape = RoundedCornerShape(16.dp)
+    Column(modifier.clip(shape).background(CardBg).border(1.dp, LineColor, shape).clickable { onClick() }) {
+        Box {
+            Poster(
+                drama, Modifier.fillMaxWidth().aspectRatio(1.42f),
+                shape = RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp),
+                alignment = BiasAlignment(0f, 0.55f)
+            )
+            if (badge != null) BadgePill(badge, badgeIcon(badge), Modifier.align(Alignment.TopStart).padding(8.dp))
+        }
+        Column(Modifier.padding(horizontal = 10.dp, vertical = 10.dp)) {
+            Text(drama.title, color = Color.White, fontWeight = FontWeight.Bold, fontSize = 15.sp,
+                maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Spacer(Modifier.height(5.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Outlined.PlayCircle, null, tint = PurpleLight, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(6.dp))
+                Text("${drama.episodes.size} episode • ${drama.category}", color = Muted, fontSize = 12.sp,
+                    maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
+        }
+    }
+}
+
+@Composable
+private fun HomeScreen(
+    dramas: List<Drama>, search: String, onSearch: (String) -> Unit,
+    category: String, onCategory: (String) -> Unit,
+    onDrama: (Drama) -> Unit, onNavigate: (String) -> Unit
+) {
+    var showNotif by remember { mutableStateOf(false) }
+    val filtered = dramas.filter {
+        it.title.contains(search, true) && (category == "Semua" || it.category == category)
+    }
+    val rows = filtered.chunked(2)
+    val badges = listOf("Populer", "Terbaru", "Paling Baru")
+    Scaffold(containerColor = AppBg, bottomBar = { DrakooBottomBar("home", onNavigate) }) { padding ->
+        LazyColumn(Modifier.fillMaxSize().padding(padding).padding(horizontal = 16.dp)) {
+            item {
+                Spacer(Modifier.height(14.dp))
+                Row(verticalAlignment = Alignment.Top) {
+                    Column(Modifier.weight(1f)) {
+                        GradientTitle("Drama", "Kita", 30)
+                        Text("Cerita singkat, rasa yang panjang.", color = Muted, fontSize = 14.sp)
+                    }
+                    Box(Modifier.clickable { showNotif = true }.padding(8.dp)) {
+                        Icon(Icons.Outlined.Notifications, "Notifikasi", tint = Color(0xFFD9CCFF), modifier = Modifier.size(28.dp))
+                        Box(Modifier.align(Alignment.TopEnd).size(9.dp).background(PurpleLight, CircleShape))
+                    }
+                }
+                Spacer(Modifier.height(16.dp))
+                SearchField(search, onSearch)
+                Spacer(Modifier.height(14.dp))
+                CategoryChips(category, onCategory)
+                Spacer(Modifier.height(24.dp))
+                SectionHeader("Pilihan untukmu", action = "Lihat Semua") { onCategory("Semua"); onSearch("") }
+                Spacer(Modifier.height(12.dp))
+            }
+            if (filtered.isEmpty()) {
+                item { Text("Belum ada serial di sini.", color = Muted, modifier = Modifier.padding(vertical = 28.dp)) }
+            }
+            items(rows.size) { r ->
+                Row(Modifier.fillMaxWidth().padding(bottom = 12.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    rows[r].forEachIndexed { k, d ->
+                        SeriesCard(d, badges.getOrNull(r * 2 + k), { onDrama(d) }, Modifier.weight(1f))
+                    }
+                    if (rows[r].size == 1) Spacer(Modifier.weight(1f))
+                }
+            }
+            item { Spacer(Modifier.height(16.dp)) }
+        }
+    }
+    if (showNotif) {
+        AlertDialog(
+            onDismissRequest = { showNotif = false }, containerColor = PanelBg,
+            title = { Text("Notifikasi", color = Color.White) },
+            text = { Text("Belum ada notifikasi baru.", color = Muted) },
+            confirmButton = { TextButton(onClick = { showNotif = false }) { Text("Tutup", color = PurpleLight) } }
+        )
+    }
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun SearchScreen(
+    dramas: List<Drama>, search: String, onSearch: (String) -> Unit,
+    category: String, onCategory: (String) -> Unit,
+    onDrama: (Drama) -> Unit, onNavigate: (String) -> Unit
+) {
+    val context = LocalContext.current
+    val prefs = remember { context.getSharedPreferences("dramakita", 0) }
+    var history by remember { mutableStateOf(readSearchHistory(prefs)) }
+    fun saveTerm(term: String) {
+        val t = term.trim()
+        if (t.isBlank()) return
+        history = (listOf(t) + history.filter { !it.equals(t, true) }).take(8)
+        writeSearchHistory(prefs, history)
+    }
+    val results = dramas.filter {
+        it.title.contains(search, true) && (category == "Semua" || it.category == category)
+    }
+    val rankColors = listOf(Color(0xFF8B3CF0), Color(0xFFF0467A), Color(0xFFF5A524), Color(0xFF3B9BF0), Color(0xFF8B5CF6))
+
+    Scaffold(containerColor = AppBg, bottomBar = { DrakooBottomBar("search", onNavigate) }) { padding ->
+        LazyColumn(Modifier.fillMaxSize().padding(padding).padding(horizontal = 16.dp)) {
+            item {
+                Spacer(Modifier.height(14.dp))
+                Row(verticalAlignment = Alignment.Top) {
+                    Column(Modifier.weight(1f)) {
+                        GradientTitle("Sear", "ch", 30)
+                        Text("Cari judul, author, atau genre favoritmu...", color = Muted, fontSize = 14.sp)
+                    }
+                    Icon(Icons.Outlined.Search, null, tint = PurpleLight, modifier = Modifier.padding(top = 6.dp, end = 4.dp).size(28.dp))
+                }
+                Spacer(Modifier.height(16.dp))
+                SearchField(search, onSearch, glow = true, onDone = { saveTerm(search) })
+                Spacer(Modifier.height(14.dp))
+                CategoryChips(category, onCategory)
+                Spacer(Modifier.height(22.dp))
+            }
+            if (history.isNotEmpty()) {
+                item {
+                    SectionHeader("Riwayat Pencarian", icon = Icons.Outlined.Schedule, action = "Hapus Semua") {
+                        history = emptyList(); writeSearchHistory(prefs, history)
+                    }
+                    Spacer(Modifier.height(12.dp))
+                    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        history.forEach { term ->
+                            Row(
+                                Modifier.clip(RoundedCornerShape(50)).background(CardBg)
+                                    .border(1.dp, ChipBorder, RoundedCornerShape(50))
+                                    .clickable { onSearch(term) }
+                                    .padding(start = 12.dp, end = 10.dp, top = 9.dp, bottom = 9.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Icon(Icons.Outlined.Search, null, tint = Muted, modifier = Modifier.size(16.dp))
+                                Spacer(Modifier.width(8.dp))
+                                Text(term, color = Color(0xFFE6DFF7), fontSize = 14.sp, maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis, modifier = Modifier.widthIn(max = 190.dp))
+                                Spacer(Modifier.width(8.dp))
+                                Icon(Icons.Filled.Close, "Hapus", tint = Muted,
+                                    modifier = Modifier.size(16.dp).clickable {
+                                        history = history.filter { it != term }; writeSearchHistory(prefs, history)
+                                    })
+                            }
+                        }
+                    }
+                    Spacer(Modifier.height(24.dp))
+                }
+            }
+            item {
+                SectionHeader("Pencarian Populer", icon = Icons.Filled.LocalFireDepartment,
+                    iconTint = Color(0xFFB45CFF), action = "Lihat Semua") { onSearch(""); onCategory("Semua") }
+                Spacer(Modifier.height(12.dp))
+                Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    dramas.take(5).forEachIndexed { index, d ->
+                        Column(Modifier.width(100.dp).clickable { onDrama(d) }) {
+                            Box {
+                                Poster(d, Modifier.fillMaxWidth().height(80.dp).border(1.dp, LineColor, RoundedCornerShape(12.dp)),
+                                    shape = RoundedCornerShape(12.dp), alignment = BiasAlignment(0f, 0.4f))
+                                Box(
+                                    Modifier.align(Alignment.TopStart).padding(6.dp).size(22.dp)
+                                        .background(rankColors[index % rankColors.size], RoundedCornerShape(6.dp)),
+                                    contentAlignment = Alignment.Center
+                                ) { Text("${index + 1}", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold) }
+                            }
+                            Spacer(Modifier.height(6.dp))
+                            Text(d.title, color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.Bold,
+                                maxLines = 2, overflow = TextOverflow.Ellipsis, lineHeight = 17.sp)
+                        }
+                    }
+                }
+                Spacer(Modifier.height(22.dp))
+                HorizontalDivider(color = LineColor)
+                Spacer(Modifier.height(20.dp))
+                SectionHeader(if (search.isBlank()) "Hasil Pencarian Terbaru" else "Hasil Pencarian",
+                    icon = Icons.Outlined.Schedule, action = "Lihat Semua") { onSearch(""); onCategory("Semua") }
+                Spacer(Modifier.height(12.dp))
+                if (results.isEmpty()) Text("Tidak ada hasil.", color = Muted, modifier = Modifier.padding(vertical = 12.dp))
+            }
+            items(results.size) { index ->
+                val d = results[index]
+                val shape = RoundedCornerShape(14.dp)
+                Row(
+                    Modifier.fillMaxWidth().padding(bottom = 10.dp).height(60.dp).clip(shape).background(CardBg)
+                        .border(1.dp, LineColor, shape)
+                        .clickable { saveTerm(search); onDrama(d) },
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Poster(d, Modifier.width(72.dp).fillMaxHeight(),
+                        shape = RoundedCornerShape(topStart = 14.dp, bottomStart = 14.dp))
+                    Column(Modifier.weight(1f).padding(start = 14.dp)) {
+                        Text(d.title, color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.Bold,
+                            maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Spacer(Modifier.height(3.dp))
+                        Text("${d.category}  ·  ${d.episodes.size} episode", color = Muted, fontSize = 13.sp)
+                    }
+                    Icon(ThinChevron, null, tint = Color(0xFFCFC6EA), modifier = Modifier.padding(end = 14.dp).size(22.dp))
+                }
+            }
+            item { Spacer(Modifier.height(16.dp)) }
+        }
+    }
+}
+
+private data class DrakooTab(val id: String, val label: String, val icon: ImageVector, val iconOn: ImageVector, val activeColor: Color)
 
 @Composable
 private fun DrakooBottomBar(selected: String, onNavigate: (String) -> Unit) {
     val tabs = listOf(
-        DrakooTab("home", "Beranda", Icons.Outlined.Home, Icons.Filled.Home),
-        DrakooTab("search", "Search", Icons.Outlined.Search, Icons.Filled.Search),
-        DrakooTab("gift", "Hadiah", Icons.Outlined.CardGiftcard, Icons.Filled.CardGiftcard),
-        DrakooTab("mylist", "Daftar Saya", Icons.Outlined.BookmarkBorder, Icons.Filled.Bookmark),
-        DrakooTab("profile", "Profil", Icons.Outlined.Person, Icons.Filled.Person)
+        DrakooTab("home", "Beranda", Icons.Outlined.Home, Icons.Filled.Home, Color(0xFF9B6BFF)),
+        DrakooTab("search", "Search", Icons.Outlined.Search, Icons.Filled.Search, Color(0xFFA56BFF)),
+        DrakooTab("gift", "Hadiah", Icons.Outlined.CardGiftcard, Icons.Filled.CardGiftcard, Color(0xFFA56BFF)),
+        DrakooTab("mylist", "Daftar Saya", Icons.Outlined.BookmarkBorder, Icons.Filled.Bookmark, Amber),
+        DrakooTab("profile", "Profil", Icons.Outlined.Person, Icons.Filled.Person, Color(0xFFB44DF0))
     )
-    Column(Modifier.fillMaxWidth().background(AppBg)) {
-        HorizontalDivider(color = LineColor)
-        Row(Modifier.fillMaxWidth().navigationBarsPadding().height(58.dp)) {
+    val barShape = RoundedCornerShape(topStart = 22.dp, topEnd = 22.dp)
+    Column(Modifier.fillMaxWidth().clip(barShape).background(BarBg).border(1.dp, LineColor, barShape)) {
+        Row(Modifier.fillMaxWidth().navigationBarsPadding().height(62.dp)) {
             tabs.forEach { tab ->
                 val on = tab.id == selected
-                val tint = if (on) Amber else Muted
-                Column(
+                val tint = if (on) tab.activeColor else Color(0xFF9A8EC2)
+                Box(
                     Modifier.weight(1f).fillMaxHeight().clickable { onNavigate(tab.id) },
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.Center
+                    contentAlignment = Alignment.Center
                 ) {
-                    Icon(if (on) tab.iconOn else tab.icon, contentDescription = tab.label, tint = tint, modifier = Modifier.size(24.dp))
-                    Spacer(Modifier.height(3.dp))
-                    Text(tab.label, color = tint, fontSize = 11.sp, fontWeight = FontWeight.Bold, maxLines = 1)
+                    if (on && tab.id == "profile") {
+                        Box(Modifier.align(Alignment.TopCenter).width(46.dp).height(3.dp)
+                            .background(tint, RoundedCornerShape(bottomStart = 3.dp, bottomEnd = 3.dp)))
+                    }
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Icon(if (on) tab.iconOn else tab.icon, contentDescription = tab.label, tint = tint, modifier = Modifier.size(24.dp))
+                        Spacer(Modifier.height(3.dp))
+                        Text(tab.label, color = tint, fontSize = 12.sp, fontWeight = FontWeight.Bold, maxLines = 1)
+                    }
                 }
             }
         }
@@ -405,97 +681,110 @@ private fun ProfileScreen(
             } catch (_: Exception) { }
         }
     }
-    var displayName by remember { mutableStateOf(prefs.getString("profile_name", "Penonton Drakoo") ?: "Penonton Drakoo") }
-    var bio by remember { mutableStateOf(prefs.getString("profile_bio", "Pecinta drama pendek ❤️") ?: "") }
+    var displayName by remember { mutableStateOf(prefs.getString("profile_name", "Pengguna Drakoo") ?: "Pengguna Drakoo") }
+    var bio by remember { mutableStateOf(prefs.getString("profile_bio", "Nikmati setiap cerita 💜") ?: "") }
     var editName by remember { mutableStateOf("") }
     var editBio by remember { mutableStateOf("") }
     var showEdit by remember { mutableStateOf(false) }
     var showHelp by remember { mutableStateOf(false) }
     val openEdit = { editName = displayName; editBio = bio; showEdit = true }
+    val handle = "@" + displayName.trim().lowercase().replace(Regex("[^a-z0-9]+"), "_").trim('_').ifBlank { "pengguna" }
+    val hasAvatar = avatarPath.isNotBlank() && File(avatarPath).exists()
+    val panelShape = RoundedCornerShape(24.dp)
 
-    Scaffold(
-        containerColor = AppBg,
-        bottomBar = { DrakooBottomBar("profile", onNavigate) }
-    ) { padding ->
-        LazyColumn(Modifier.fillMaxSize().padding(padding).padding(horizontal = 20.dp)) {
-            item {
-                Spacer(Modifier.height(14.dp))
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Box(Modifier.size(30.dp).background(Amber, RoundedCornerShape(8.dp)), contentAlignment = Alignment.Center) {
-                        Icon(Icons.Filled.PlayArrow, null, tint = Color(0xFF1A0F1E), modifier = Modifier.size(22.dp))
-                    }
-                    Text("Drakoo", fontSize = 22.sp, fontWeight = FontWeight.ExtraBold, color = Color.White,
-                        modifier = Modifier.weight(1f).padding(start = 10.dp))
-                    IconButton(onClick = { onNavigate("search") }) {
-                        Icon(Icons.Outlined.Search, "Cari", tint = Color.White, modifier = Modifier.size(26.dp))
-                    }
-                    IconButton(onClick = { showHelp = true }) {
-                        Icon(Icons.Filled.Settings, "Pengaturan", tint = Color.White, modifier = Modifier.size(26.dp))
-                    }
-                }
-                Spacer(Modifier.height(20.dp))
-                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                    Box(Modifier.size(90.dp).clickable { photoPicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) }) {
-                        Box(
-                            Modifier.fillMaxSize().clip(CircleShape)
-                                .background(Brush.verticalGradient(listOf(Color(0xFFEA7A63), Color(0xFF8B285E)))),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            if (avatarPath.isNotBlank() && File(avatarPath).exists()) {
-                                AsyncImage(model = File(avatarPath), contentDescription = "Foto profil", contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize().clip(CircleShape))
-                            } else {
-                                Icon(Icons.Filled.Person, null, tint = Color(0xFFFFE9E4), modifier = Modifier.size(52.dp))
-                            }
-                        }
-                        Box(
-                            Modifier.align(Alignment.BottomEnd).offset(x = 2.dp, y = 2.dp).size(30.dp)
-                                .clip(CircleShape).background(PanelBg).border(2.dp, AppBg, CircleShape),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Icon(Icons.Filled.PhotoCamera, null, tint = Color.White, modifier = Modifier.size(16.dp))
-                        }
-                    }
-                    Column(Modifier.weight(1f).padding(start = 22.dp).clickable { openEdit() }) {
-                        Text(displayName, fontSize = 20.sp, fontWeight = FontWeight.ExtraBold, color = Color.White, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                        Spacer(Modifier.height(2.dp))
-                        Text("@penonton", color = Muted, fontSize = 14.sp)
-                        Spacer(Modifier.height(8.dp))
-                        Text(bio, color = Muted, fontSize = 14.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                    }
-                    Icon(ThinChevron, null, tint = Muted, modifier = Modifier.size(22.dp))
-                }
-                Spacer(Modifier.height(22.dp))
-                Row(Modifier.fillMaxWidth().height(46.dp), verticalAlignment = Alignment.CenterVertically) {
-                    val stats = listOf(
-                        watchedCount.toString() to "Ditonton",
-                        listCount.toString() to "Daftar Tonton",
-                        favoriteCount.toString() to "Favorit",
-                        badgeCount.toString() to "Lencana"
-                    )
-                    stats.forEachIndexed { index, stat ->
-                        if (index > 0) VerticalDivider(color = LineColor, modifier = Modifier.height(44.dp))
-                        ProfileStat(stat.first, stat.second, Modifier.weight(1f))
-                    }
-                }
-                Spacer(Modifier.height(14.dp))
+    Scaffold(containerColor = AppBg, bottomBar = { DrakooBottomBar("profile", onNavigate) }) { padding ->
+        Box(Modifier.fillMaxSize().padding(padding)) {
+            if (hasAvatar) {
+                AsyncImage(model = File(avatarPath), contentDescription = null, contentScale = ContentScale.Crop,
+                    alpha = 0.22f, modifier = Modifier.fillMaxWidth().height(300.dp))
+                Box(Modifier.fillMaxWidth().height(300.dp).background(Brush.verticalGradient(listOf(Color.Transparent, AppBg))))
+            } else {
+                Box(Modifier.fillMaxWidth().height(260.dp).background(Brush.verticalGradient(listOf(Color(0xFF2A1459), AppBg))))
             }
-            item {
-                Column(Modifier.fillMaxWidth().background(PanelBg, RoundedCornerShape(26.dp)).padding(horizontal = 14.dp)) {
-                    ProfileRow(Icons.Filled.Person, "Profil Saya", "Ubah nama, bio, dan foto profil") { openEdit() }
-                    HorizontalDivider(color = LineColor, modifier = Modifier.padding(start = 44.dp))
-                    ProfileRow(Icons.Filled.Bookmark, "Daftar Tonton Saya", "Drama yang sedang kamu tonton") { onNavigate("mylist") }
-                    HorizontalDivider(color = LineColor, modifier = Modifier.padding(start = 44.dp))
-                    ProfileRow(Icons.Filled.Favorite, "Drama Favorit Saya", "Koleksi drama favorit kamu") { onNavigate("favorites") }
-                    HorizontalDivider(color = LineColor, modifier = Modifier.padding(start = 44.dp))
-                    ProfileRow(Icons.Outlined.Schedule, "Riwayat Tontonan", "Drama yang pernah kamu tonton") { onNavigate("history") }
+            LazyColumn(Modifier.fillMaxSize().padding(horizontal = 20.dp)) {
+                item {
+                    Spacer(Modifier.height(14.dp))
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Box(
+                            Modifier.size(34.dp).clip(RoundedCornerShape(9.dp))
+                                .background(Brush.linearGradient(listOf(Color(0xFF7B3FE4), Color(0xFFB44DF0)))),
+                            contentAlignment = Alignment.Center
+                        ) { Icon(Icons.Filled.PlayArrow, null, tint = Color.White, modifier = Modifier.size(22.dp)) }
+                        Text("Drakoo", fontSize = 22.sp, fontWeight = FontWeight.ExtraBold, color = Color.White,
+                            modifier = Modifier.weight(1f).padding(start = 10.dp))
+                        IconButton(onClick = { onNavigate("search") }) {
+                            Icon(Icons.Outlined.Search, "Cari", tint = Color.White, modifier = Modifier.size(26.dp))
+                        }
+                        IconButton(onClick = { showHelp = true }) {
+                            Icon(Icons.Filled.Settings, "Pengaturan", tint = Color.White, modifier = Modifier.size(26.dp))
+                        }
+                    }
+                    Spacer(Modifier.height(18.dp))
+                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                        Box(Modifier.size(96.dp).clickable { photoPicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) }) {
+                            Box(
+                                Modifier.fillMaxSize().clip(CircleShape)
+                                    .background(Brush.sweepGradient(listOf(Color(0xFF8B3CF0), Color(0xFFFF4DA6), Color(0xFF8B3CF0))))
+                                    .padding(3.dp)
+                            ) {
+                                Box(Modifier.fillMaxSize().clip(CircleShape).background(PanelBg), contentAlignment = Alignment.Center) {
+                                    if (hasAvatar) {
+                                        AsyncImage(model = File(avatarPath), contentDescription = "Foto profil",
+                                            contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
+                                    } else {
+                                        Icon(Icons.Filled.Person, null, tint = Color(0xFFE6DFF7), modifier = Modifier.size(52.dp))
+                                    }
+                                }
+                            }
+                            Box(
+                                Modifier.align(Alignment.BottomEnd).offset(x = 2.dp, y = 2.dp).size(32.dp)
+                                    .clip(CircleShape).background(PanelBg).border(2.dp, AppBg, CircleShape),
+                                contentAlignment = Alignment.Center
+                            ) { Icon(Icons.Filled.PhotoCamera, null, tint = Color.White, modifier = Modifier.size(17.dp)) }
+                        }
+                        Column(Modifier.weight(1f).padding(start = 18.dp).clickable { openEdit() }) {
+                            Text(displayName, fontSize = 22.sp, fontWeight = FontWeight.ExtraBold, color = Color.White,
+                                maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            Spacer(Modifier.height(2.dp))
+                            Text(handle, color = Muted, fontSize = 15.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            Spacer(Modifier.height(8.dp))
+                            Text(bio, color = Color(0xFFC9B8F5), fontSize = 15.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                        }
+                        Icon(ThinChevron, null, tint = Muted, modifier = Modifier.size(24.dp))
+                    }
+                    Spacer(Modifier.height(22.dp))
+                    Row(Modifier.fillMaxWidth().height(54.dp), verticalAlignment = Alignment.CenterVertically) {
+                        val stats = listOf(
+                            Triple(Icons.Outlined.Visibility, watchedCount.toString(), "Ditonton"),
+                            Triple(Icons.Outlined.BookmarkBorder, listCount.toString(), "Daftar Tonton"),
+                            Triple(Icons.Outlined.FavoriteBorder, favoriteCount.toString(), "Favorit"),
+                            Triple(Icons.Outlined.VerifiedUser, badgeCount.toString(), "Lencana")
+                        )
+                        stats.forEachIndexed { index, stat ->
+                            if (index > 0) VerticalDivider(color = LineColor, modifier = Modifier.height(40.dp))
+                            ProfileStat(stat.first, stat.second, stat.third, Modifier.weight(1f))
+                        }
+                    }
+                    Spacer(Modifier.height(20.dp))
                 }
-                Spacer(Modifier.height(18.dp))
-                Column(Modifier.fillMaxWidth().background(PanelBg, RoundedCornerShape(26.dp)).padding(horizontal = 14.dp)) {
-                    ProfileRow(CrownIcon, "Langganan Premium", "Nikmati fitur eksklusif tanpa iklan") { showHelp = true }
-                    HorizontalDivider(color = LineColor, modifier = Modifier.padding(start = 44.dp))
-                    ProfileRow(Icons.Outlined.HeadsetMic, "Pusat Bantuan", "Panduan dan pertanyaan umum") { showHelp = true }
+                item {
+                    Column(Modifier.fillMaxWidth().clip(panelShape).background(PanelBg).border(1.dp, LineColor, panelShape).padding(horizontal = 14.dp)) {
+                        ProfileRow(Icons.Filled.Person, Color(0xFFFF5C9D), "Profil Saya", "Ubah nama, bio, dan foto profil") { openEdit() }
+                        HorizontalDivider(color = LineColor, modifier = Modifier.padding(start = 44.dp))
+                        ProfileRow(Icons.Filled.Bookmark, Color(0xFFB05CFF), "Daftar Tonton Saya", "Drama yang sedang kamu tonton") { onNavigate("mylist") }
+                        HorizontalDivider(color = LineColor, modifier = Modifier.padding(start = 44.dp))
+                        ProfileRow(Icons.Filled.Favorite, Color(0xFFFF4D8D), "Drama Favorit Saya", "Koleksi drama favorit kamu") { onNavigate("favorites") }
+                        HorizontalDivider(color = LineColor, modifier = Modifier.padding(start = 44.dp))
+                        ProfileRow(Icons.Outlined.History, Color(0xFF9B6BFF), "Riwayat Tontonan", "Drama yang pernah kamu tonton") { onNavigate("history") }
+                    }
+                    Spacer(Modifier.height(18.dp))
+                    Column(Modifier.fillMaxWidth().clip(panelShape).background(PanelBg).border(1.dp, LineColor, panelShape).padding(horizontal = 14.dp)) {
+                        ProfileRow(CrownFilled, Color(0xFFFFB020), "Langganan Premium", "Nikmati fitur eksklusif tanpa iklan") { showHelp = true }
+                        HorizontalDivider(color = LineColor, modifier = Modifier.padding(start = 44.dp))
+                        ProfileRow(Icons.Filled.HeadsetMic, Color(0xFF4C8DFF), "Pusat Bantuan", "Panduan dan pertanyaan umum") { showHelp = true }
+                    }
+                    Spacer(Modifier.height(24.dp))
                 }
-                Spacer(Modifier.height(24.dp))
             }
         }
     }
@@ -514,7 +803,7 @@ private fun ProfileScreen(
                     bio = editBio.trim()
                     prefs.edit().putString("profile_name", displayName).putString("profile_bio", bio).apply()
                     showEdit = false
-                }) { Text("Simpan", color = Coral) }
+                }) { Text("Simpan", color = PurpleLight) }
             },
             dismissButton = { TextButton(onClick = { showEdit = false }) { Text("Batal", color = Muted) } })
     }
@@ -522,27 +811,31 @@ private fun ProfileScreen(
         AlertDialog(onDismissRequest = { showHelp = false }, containerColor = PanelBg,
             title = { Text("Segera hadir", color = Color.White) },
             text = { Text("Fitur ini akan ditambahkan pada versi berikutnya.", color = Muted) },
-            confirmButton = { TextButton(onClick = { showHelp = false }) { Text("Mengerti", color = Coral) } })
+            confirmButton = { TextButton(onClick = { showHelp = false }) { Text("Mengerti", color = PurpleLight) } })
     }
 }
 
 @Composable
-private fun ProfileStat(value: String, label: String, modifier: Modifier = Modifier) {
-    Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = modifier) {
-        Text(value, color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.ExtraBold)
-        Spacer(Modifier.height(3.dp))
+private fun ProfileStat(icon: ImageVector, value: String, label: String, modifier: Modifier = Modifier) {
+    Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center, modifier = modifier) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Icon(icon, null, tint = PurpleLight, modifier = Modifier.size(22.dp))
+            Spacer(Modifier.width(8.dp))
+            Text(value, color = Color.White, fontSize = 22.sp, fontWeight = FontWeight.ExtraBold)
+        }
+        Spacer(Modifier.height(2.dp))
         Text(label, color = Muted, fontSize = 12.sp, maxLines = 1)
     }
 }
 
 @Composable
-private fun ProfileRow(icon: ImageVector, title: String, subtitle: String, onClick: () -> Unit) {
-    Row(Modifier.fillMaxWidth().clickable { onClick() }.padding(vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+private fun ProfileRow(icon: ImageVector, tint: Color, title: String, subtitle: String, onClick: () -> Unit) {
+    Row(Modifier.fillMaxWidth().clickable { onClick() }.padding(vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
         Box(Modifier.width(44.dp)) {
-            Icon(icon, null, tint = Coral, modifier = Modifier.size(28.dp))
+            Icon(icon, null, tint = tint, modifier = Modifier.size(28.dp))
         }
         Column(Modifier.weight(1f)) {
-            Text(title, color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.Bold)
+            Text(title, color = Color.White, fontSize = 17.sp, fontWeight = FontWeight.SemiBold)
             Spacer(Modifier.height(2.dp))
             Text(subtitle, color = Muted, fontSize = 13.sp)
         }
@@ -661,39 +954,201 @@ private fun SimpleTabScreen(title: String, subtitle: String, icon: String, onNav
     }
 }
 
+private data class ListEntry(val drama: Drama, val record: WatchRecord?, val favorite: Boolean) {
+    val finished: Boolean
+        get() = record != null && record.episode >= drama.episodes.size && record.progress >= 0.95f
+    val inProgress: Boolean
+        get() = record != null && !finished
+}
+
 @Composable
-private fun MyListScreen(
-    dramas: List<Drama>, lastWatched: String, lastEpisode: Int, favorites: Set<String>,
-    onDrama: (Drama) -> Unit, onNavigate: (String) -> Unit
+private fun ListFilterChip(label: String, icon: ImageVector, count: Int, selected: Boolean, onClick: () -> Unit) {
+    Row(
+        Modifier.clip(RoundedCornerShape(50))
+            .then(
+                if (selected) Modifier.background(Brush.horizontalGradient(listOf(Color(0xFF7B3FE4), Color(0xFF9B4DFF))))
+                else Modifier.border(1.dp, ChipBorder, RoundedCornerShape(50))
+            )
+            .clickable { onClick() }
+            .padding(start = 14.dp, end = 10.dp, top = 9.dp, bottom = 9.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Icon(icon, null, tint = if (selected) Color.White else Color(0xFFCFC6EA), modifier = Modifier.size(18.dp))
+        Spacer(Modifier.width(8.dp))
+        Text(label, color = if (selected) Color.White else Color(0xFFCFC6EA), fontSize = 14.sp,
+            fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium, maxLines = 1)
+        Spacer(Modifier.width(8.dp))
+        Box(
+            Modifier.size(22.dp).background(if (selected) Color(0x33FFFFFF) else Color(0xFF2A1F52), CircleShape),
+            contentAlignment = Alignment.Center
+        ) { Text("$count", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold) }
+    }
+}
+
+@Composable
+private fun ListEntryCard(
+    entry: ListEntry, firstInProgress: Boolean,
+    onOpen: () -> Unit, onPlay: () -> Unit, onRemoveFavorite: () -> Unit, onRemoveHistory: () -> Unit
 ) {
-    val myDramas = dramas.filter { it.id == lastWatched || favorites.contains(it.id) }
-    Scaffold(containerColor = AppBg, bottomBar = { DrakooBottomBar("mylist", onNavigate) }) { padding ->
-        LazyColumn(Modifier.fillMaxSize().padding(padding).padding(16.dp)) {
-            item { Text("Daftar Saya", color = Color.White, fontSize = 28.sp, fontWeight = FontWeight.ExtraBold); Spacer(Modifier.height(6.dp)); Text("Drama yang sedang kamu ikuti dan favoritmu", color = Color(0xFFB9A9BD)); Spacer(Modifier.height(20.dp)) }
-            if (myDramas.isEmpty()) item { Text("Belum ada drama di daftar kamu. Pilih serial dari Beranda untuk mulai menonton.", color = Color(0xFFB9A9BD)) }
-            items(myDramas.size) { index ->
-                val drama = myDramas[index]
-                Row(Modifier.fillMaxWidth().clickable { onDrama(drama) }.padding(vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Poster(drama, Modifier.size(84.dp, 112.dp))
-                    Column(Modifier.weight(1f).padding(start = 12.dp)) {
-                        Text(drama.title, color = Color.White, fontWeight = FontWeight.Bold)
-                        Text(if (drama.id == lastWatched) "Terakhir: Episode $lastEpisode" else "Favorit kamu", color = Color(0xFFB9A9BD), fontSize = 13.sp)
+    var menu by remember { mutableStateOf(false) }
+    val drama = entry.drama
+    val record = entry.record
+    val progress = if (entry.finished) 1f else (record?.progress ?: 0f)
+    val badge = when {
+        entry.favorite -> "Favorit"
+        entry.inProgress -> if (firstInProgress) "Sedang Tonton" else "Lanjutkan"
+        else -> null
+    }
+    val shape = RoundedCornerShape(18.dp)
+    Row(
+        Modifier.fillMaxWidth().padding(bottom = 12.dp).clip(shape).background(CardBg)
+            .border(1.dp, LineColor, shape).clickable { onOpen() }.padding(10.dp)
+    ) {
+        Box(Modifier.size(96.dp, 112.dp)) {
+            Poster(drama, Modifier.fillMaxSize(), shape = RoundedCornerShape(12.dp), alignment = BiasAlignment(0f, 0.4f))
+            if (badge != null) BadgePill(badge, badgeIcon(badge), Modifier.align(Alignment.TopStart).padding(5.dp))
+        }
+        Column(Modifier.weight(1f).padding(start = 12.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(drama.title, color = Color.White, fontSize = 17.sp, fontWeight = FontWeight.Bold,
+                    maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                Box {
+                    Icon(Icons.Filled.MoreVert, "Menu", tint = Muted,
+                        modifier = Modifier.size(24.dp).clickable { menu = true })
+                    DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+                        if (entry.favorite) {
+                            DropdownMenuItem(text = { Text("Hapus dari favorit") }, onClick = { menu = false; onRemoveFavorite() })
+                        }
+                        if (record != null) {
+                            DropdownMenuItem(text = { Text("Hapus riwayat") }, onClick = { menu = false; onRemoveHistory() })
+                        }
+                        DropdownMenuItem(text = { Text("Lihat detail") }, onClick = { menu = false; onOpen() })
                     }
-                    Icon(Icons.Default.ChevronRight, null, tint = Color(0xFFB9A9BD))
                 }
+            }
+            Spacer(Modifier.height(6.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                listOfNotNull(drama.category, secondTag(drama.category)).forEach { tag ->
+                    Text(tag, color = Color(0xFFCFC6EA), fontSize = 12.sp, fontWeight = FontWeight.Medium,
+                        modifier = Modifier.background(Color(0xFF251A4A), RoundedCornerShape(8.dp)).padding(horizontal = 10.dp, vertical = 4.dp))
+                }
+            }
+            Spacer(Modifier.height(6.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                val statusIcon = if (entry.finished) Icons.Outlined.CheckCircle else Icons.Outlined.Schedule
+                val statusText = when {
+                    entry.finished -> "Selesai  •  ${drama.episodes.size} episode"
+                    record == null -> "Belum ditonton"
+                    record.durationMs <= 0L -> "Episode ${record.episode}"
+                    else -> {
+                        val remain = ((record.durationMs - record.positionMs).coerceAtLeast(0L) / 60_000L).toInt()
+                        "Episode ${record.episode}  •  " + (if (remain < 1) "kurang dari 1 menit lagi" else "$remain menit lagi")
+                    }
+                }
+                Icon(statusIcon, null, tint = if (entry.finished) Color(0xFF7C8CFF) else Muted, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(6.dp))
+                Text(statusText, color = Muted, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f))
+                Box(
+                    Modifier.size(40.dp).clip(CircleShape)
+                        .then(if (entry.finished) Modifier.border(1.5.dp, PurpleLight, CircleShape) else Modifier.background(Purple))
+                        .clickable { onPlay() },
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(Icons.Filled.PlayArrow, "Putar", tint = if (entry.finished) PurpleLight else Color.White, modifier = Modifier.size(24.dp))
+                }
+            }
+            Spacer(Modifier.height(4.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Box(Modifier.weight(1f).height(6.dp).clip(RoundedCornerShape(3.dp)).background(Color(0xFF2A1F52))) {
+                    Box(
+                        Modifier.fillMaxWidth(progress.coerceIn(0f, 1f)).fillMaxHeight()
+                            .background(Brush.horizontalGradient(listOf(Color(0xFF7B3FE4), PurpleLight)))
+                    )
+                }
+                Spacer(Modifier.width(10.dp))
+                Text("${(progress * 100).toInt()}%", color = Color(0xFFCFC6EA), fontSize = 12.sp, fontWeight = FontWeight.Medium)
             }
         }
     }
 }
 
 @Composable
-private fun Poster(drama: Drama, modifier: Modifier = Modifier) {
+private fun MyListScreen(
+    dramas: List<Drama>, records: List<WatchRecord>, favorites: Set<String>, initialFilter: String,
+    onDrama: (Drama) -> Unit, onPlay: (Drama, Int) -> Unit,
+    onRemoveFavorite: (String) -> Unit, onRemoveHistory: (String) -> Unit, onNavigate: (String) -> Unit
+) {
+    var filter by remember(initialFilter) { mutableStateOf(initialFilter) }
+    val latest = records.groupBy { it.seriesId }.mapValues { it.value.first() }
+    val entries = dramas.mapNotNull { d ->
+        val r = latest[d.id]
+        val f = favorites.contains(d.id)
+        if (r != null || f) ListEntry(d, r, f) else null
+    }.sortedByDescending { it.record?.watchedAt ?: 0L }
+    val visible = when (filter) {
+        "Sedang Tonton" -> entries.filter { it.inProgress }
+        "Favorit" -> entries.filter { it.favorite }
+        "Selesai" -> entries.filter { it.finished }
+        else -> entries
+    }
+    val firstInProgress = entries.firstOrNull { it.inProgress }?.drama?.id
+    val filters = listOf(
+        Triple("Semua", Icons.Outlined.Schedule, entries.size),
+        Triple("Sedang Tonton", Icons.Outlined.PlayArrow, entries.count { it.inProgress }),
+        Triple("Favorit", Icons.Outlined.FavoriteBorder, entries.count { it.favorite }),
+        Triple("Selesai", Icons.Outlined.CheckCircle, entries.count { it.finished })
+    )
+    Scaffold(containerColor = AppBg, bottomBar = { DrakooBottomBar("mylist", onNavigate) }) { padding ->
+        LazyColumn(Modifier.fillMaxSize().padding(padding).padding(horizontal = 16.dp)) {
+            item {
+                Spacer(Modifier.height(14.dp))
+                GradientTitle("Daftar ", "Saya", 30)
+                Text("Drama yang sedang kamu ikuti dan favoritmu", color = Muted, fontSize = 14.sp)
+                Spacer(Modifier.height(16.dp))
+                Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    filters.forEach { f -> ListFilterChip(f.first, f.second, f.third, filter == f.first) { filter = f.first } }
+                }
+                Spacer(Modifier.height(18.dp))
+                if (visible.isEmpty()) {
+                    Text(
+                        if (entries.isEmpty()) "Belum ada drama di daftar kamu. Tonton serial dari Beranda atau tandai favorit untuk mulai."
+                        else "Belum ada drama di kategori ini.",
+                        color = Muted, modifier = Modifier.padding(vertical = 12.dp)
+                    )
+                }
+            }
+            items(visible.size) { index ->
+                val entry = visible[index]
+                ListEntryCard(
+                    entry = entry,
+                    firstInProgress = entry.drama.id == firstInProgress,
+                    onOpen = { onDrama(entry.drama) },
+                    onPlay = {
+                        val ep = if (entry.record == null || entry.finished) 1 else entry.record.episode
+                        onPlay(entry.drama, ep)
+                    },
+                    onRemoveFavorite = { onRemoveFavorite(entry.drama.id) },
+                    onRemoveHistory = { onRemoveHistory(entry.drama.id) }
+                )
+            }
+            item { Spacer(Modifier.height(16.dp)) }
+        }
+    }
+}
+
+@Composable
+private fun Poster(
+    drama: Drama, modifier: Modifier = Modifier,
+    shape: Shape = RoundedCornerShape(14.dp), alignment: Alignment = Alignment.Center
+) {
     if (!drama.coverUrl.isNullOrBlank()) {
         AsyncImage(
             model = drama.coverUrl,
             contentDescription = drama.title,
             contentScale = ContentScale.Crop,
-            modifier = modifier.clip(RoundedCornerShape(14.dp))
+            alignment = alignment,
+            modifier = modifier.clip(shape)
         )
         return
     }
@@ -702,21 +1157,26 @@ private fun Poster(drama: Drama, modifier: Modifier = Modifier) {
             painter = painterResource(drama.cover),
             contentDescription = drama.title,
             contentScale = ContentScale.Crop,
-            modifier = modifier.clip(RoundedCornerShape(14.dp))
+            alignment = alignment,
+            modifier = modifier.clip(shape)
         )
         return
     }
-    Box(
-        modifier.background(Brush.verticalGradient(drama.colors), RoundedCornerShape(14.dp))
-            .padding(12.dp),
+    BoxWithConstraints(
+        modifier.clip(shape).background(Brush.verticalGradient(drama.colors)).padding(8.dp),
         contentAlignment = Alignment.BottomStart
     ) {
-        Column {
-            Text("DRAMAKITA", color = Color.White.copy(alpha = .75f), fontSize = 10.sp, fontWeight = FontWeight.Bold)
-            Spacer(Modifier.height(6.dp))
-            Text(drama.title, color = Color.White, fontSize = 20.sp, lineHeight = 22.sp, fontWeight = FontWeight.ExtraBold)
-            Spacer(Modifier.height(4.dp))
-            Text(drama.category.uppercase(), color = Color.White.copy(alpha = .8f), fontSize = 10.sp)
+        if (maxWidth > 120.dp && maxHeight > 100.dp) {
+            Column(Modifier.padding(4.dp)) {
+                Text("DRAMAKITA", color = Color.White.copy(alpha = .75f), fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                Spacer(Modifier.height(6.dp))
+                Text(drama.title, color = Color.White, fontSize = 20.sp, lineHeight = 22.sp, fontWeight = FontWeight.ExtraBold)
+                Spacer(Modifier.height(4.dp))
+                Text(drama.category.uppercase(), color = Color.White.copy(alpha = .8f), fontSize = 10.sp)
+            }
+        } else {
+            Text(drama.title, color = Color.White, fontSize = 11.sp, lineHeight = 13.sp,
+                fontWeight = FontWeight.ExtraBold, maxLines = 3, overflow = TextOverflow.Ellipsis)
         }
     }
 }

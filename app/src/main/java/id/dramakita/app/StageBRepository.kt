@@ -46,6 +46,25 @@ internal object StageBRepository {
         }
     }
 
+    fun removeSeries(context: Context, seriesId: String) {
+        val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        val json = JSONArray()
+        readHistory(context).filterNot { it.seriesId == seriesId }.forEach { record ->
+            json.put(JSONObject().apply {
+                put("seriesId", record.seriesId)
+                put("seriesTitle", record.seriesTitle)
+                put("episode", record.episode)
+                put("positionMs", record.positionMs)
+                put("durationMs", record.durationMs)
+                put("watchedAt", record.watchedAt)
+                put("coverUrl", record.coverUrl)
+            })
+        }
+        val editor = prefs.edit()
+        prefs.all.keys.filter { it.startsWith("position_${seriesId}_") }.forEach { editor.remove(it) }
+        editor.putString(HISTORY_KEY, json.toString()).apply()
+    }
+
     fun readHistory(context: Context): List<WatchRecord> {
         val raw = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getString(HISTORY_KEY, null) ?: return emptyList()
         return try {
