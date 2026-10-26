@@ -4,6 +4,14 @@ plugins {
     id("org.jetbrains.kotlin.plugin.compose")
 }
 
+// Firebase is enabled only after google-services.json is added to app/.
+// This keeps GitHub Actions builds working for users who have not configured Firebase yet.
+val firebaseConfigExists = file("google-services.json").exists()
+if (firebaseConfigExists) {
+    apply(plugin = "com.google.gms.google-services")
+    apply(plugin = "com.google.firebase.crashlytics")
+}
+
 android {
     namespace = "id.dramakita.app"
     compileSdk = 35
@@ -38,4 +46,12 @@ dependencies {
     implementation("io.coil-kt:coil-compose:2.7.0")
     implementation("androidx.media3:media3-ui:1.5.1")
     debugImplementation("androidx.compose.ui:ui-tooling")
+}
+
+
+if (firebaseConfigExists) {
+    dependencies {
+        implementation(platform("com.google.firebase:firebase-bom:33.7.0"))
+        implementation("com.google.firebase:firebase-crashlytics")
+    }
 }
