@@ -411,6 +411,7 @@ private fun ProfileScreen(
     var editBio by remember { mutableStateOf("") }
     var showEdit by remember { mutableStateOf(false) }
     var showHelp by remember { mutableStateOf(false) }
+    var showCrashTestConfirm by remember { mutableStateOf(false) }
     val openEdit = { editName = displayName; editBio = bio; showEdit = true }
 
     Scaffold(
@@ -494,6 +495,8 @@ private fun ProfileScreen(
                     ProfileRow(CrownIcon, "Langganan Premium", "Nikmati fitur eksklusif tanpa iklan") { showHelp = true }
                     HorizontalDivider(color = LineColor, modifier = Modifier.padding(start = 44.dp))
                     ProfileRow(Icons.Outlined.HeadsetMic, "Pusat Bantuan", "Panduan dan pertanyaan umum") { showHelp = true }
+                    HorizontalDivider(color = LineColor, modifier = Modifier.padding(start = 44.dp))
+                    ProfileRow(Icons.Filled.Settings, "Uji Crashlytics (sementara)", "Tombol tes; akan menutup aplikasi") { showCrashTestConfirm = true }
                 }
                 Spacer(Modifier.height(24.dp))
             }
@@ -523,6 +526,28 @@ private fun ProfileScreen(
             title = { Text("Segera hadir", color = Color.White) },
             text = { Text("Fitur ini akan ditambahkan pada versi berikutnya.", color = Muted) },
             confirmButton = { TextButton(onClick = { showHelp = false }) { Text("Mengerti", color = Coral) } })
+    }
+    if (showCrashTestConfirm) {
+        AlertDialog(
+            onDismissRequest = { showCrashTestConfirm = false },
+            containerColor = PanelBg,
+            title = { Text("Uji Crashlytics", color = Color.White) },
+            text = {
+                Text(
+                    "Tes ini akan sengaja menutup DramaKita. Gunakan hanya untuk verifikasi Firebase, lalu hapus tombol uji dari kode sebelum membagikan APK.",
+                    color = Muted
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    showCrashTestConfirm = false
+                    throw RuntimeException("DramaKita Crashlytics test crash")
+                }) { Text("Jalankan tes", color = Coral) }
+            },
+            dismissButton = {
+                TextButton(onClick = { showCrashTestConfirm = false }) { Text("Batal", color = Muted) }
+            }
+        )
     }
 }
 
