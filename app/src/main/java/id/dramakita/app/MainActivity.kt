@@ -421,9 +421,9 @@ private fun SeriesCard(drama: Drama, badge: String?, onClick: () -> Unit, modifi
     Column(modifier.clip(shape).background(CardBg).border(1.dp, LineColor, shape).clickable { onClick() }) {
         Box {
             Poster(
-                drama, Modifier.fillMaxWidth().aspectRatio(1.42f),
+                drama, Modifier.fillMaxWidth().aspectRatio(0.8f),
                 shape = RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp),
-                alignment = BiasAlignment(0f, 0.55f)
+                alignment = BiasAlignment(0f, 0.6f)
             )
             if (badge != null) BadgePill(badge, badgeIcon(badge), Modifier.align(Alignment.TopStart).padding(8.dp))
         }
