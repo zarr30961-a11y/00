@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "1093979567136",
+    "project_id": "dramakita-a9f01",
+    "storage_bucket": "dramakita-a9f01.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:1093979567136:android:8d7457280ca86103017845",
+        "android_client_info": {
+          "package_name": "id.dramakita.app"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBPMZhvuyddBUh-0-DrnT5DXwOKf-dIaf8"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
